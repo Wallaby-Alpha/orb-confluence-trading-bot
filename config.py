@@ -81,7 +81,8 @@ TRADE_WINDOW_END_ET = "12:00"
 # ===========================================================================
 POLL_INTERVAL_SECONDS = 30
 CANDLE_TF_MINUTES     = 5
-LOG_FILE              = "orb_bot.log"
+BASE_DIR              = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE              = os.environ.get("LOG_FILE", os.path.join(BASE_DIR, "orb_bot.log"))
 LOG_LEVEL             = os.environ.get("LOG_LEVEL", "INFO")
 
 
