@@ -1,0 +1,19 @@
+[Unit]
+Description=ORB Confluence Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/orb_bot
+EnvironmentFile=/etc/orb_bot.env
+ExecStart=/home/ubuntu/orb_bot/venv/bin/python main.py
+Restart=on-failure
+RestartSec=15
+StandardOutput=append:/home/ubuntu/orb_bot/orb_bot.log
+StandardError=append:/home/ubuntu/orb_bot/orb_bot.log
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
