@@ -260,6 +260,14 @@ def cancel_order(symbol: str, order_id: str) -> bool:
     return False
 
 
+def cancel_all_orders(symbol: str) -> bool:
+    """Cancels all open limit orders and conditional/plan orders for a symbol."""
+    params = {"symbol": symbol}
+    res1 = _delete("/capi/v3/allOpenOrders", params)
+    res2 = _delete("/capi/v3/algoOpenOrders", params)
+    return (res1 is not None) or (res2 is not None)
+
+
 def get_position(symbol: str) -> dict | None:
     """
     Returns the current open position for a symbol.
