@@ -42,8 +42,8 @@ from market_data import (
 from strategy_engine import check_signal, determine_session_bias, TradeSignal
 from trade_manager import TradeManager
 from telegram_alerts import (
-    send_asia_session_alert, send_premarket_range_alert,
-    send_error_alert, send_daily_summary
+    send_startup_alert, send_asia_session_alert,
+    send_premarket_range_alert, send_error_alert, send_daily_summary
 )
 
 # ===========================================================================
@@ -213,6 +213,12 @@ def run_bot():
     logger.info(f"  Coins: {COINS}")
     logger.info(f"  Daily Risk Budget: ${DAILY_RISK_BUDGET_USD:.2f} USD")
     logger.info("=" * 60)
+
+    # Send startup confirmation to Telegram
+    try:
+        send_startup_alert(COINS, DAILY_RISK_BUDGET_USD)
+    except Exception as e:
+        logger.error(f"Failed to send startup alert: {e}")
 
     state = BotState()
     last_day = None

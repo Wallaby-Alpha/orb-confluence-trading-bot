@@ -30,6 +30,23 @@ def _send_message(text: str) -> bool:
         return False
 
 
+def send_startup_alert(coins: list, daily_risk_usd: float) -> None:
+    """Sends a ping immediately upon bot startup to verify Telegram delivery."""
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        "🟢 <b>ORB BOT ONLINE</b>",
+        f"<i>{now_str}</i>",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        f"  <b>Coins:</b> {', '.join(coins)}",
+        f"  <b>Daily Risk Budget:</b> ${daily_risk_usd:.2f} USD",
+        "  <b>Status:</b> Listening for Asia Close (08:00 UTC)",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "✅ System connected and monitoring feeds.",
+    ]
+    _send_message("\n".join(lines))
+    logger.info("Sent bot startup alert to Telegram.")
+
+
 def send_asia_session_alert(asia_ranges: dict) -> None:
     """
     Sends ONE combined alert after the Asia session closes (08:00 UTC).
