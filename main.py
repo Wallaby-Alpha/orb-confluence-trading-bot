@@ -183,7 +183,7 @@ def evaluate_signals(prem_ranges: dict, asia_ranges: dict, all_bars: dict) -> di
         # Width filter
         width_pct = (p["high"] - p["low"]) / p["mid"]
         if width_pct < cfg["min_width_pct"]:
-            signals[coin] = f"SKIP (range {width_pct:.2%} < min {cfg['min_width_pct']:.2%})"
+            signals[coin] = f"SKIP (range {width_pct:.2%} below min {cfg['min_width_pct']:.2%})"
             continue
 
         bias = determine_session_bias(a, p)

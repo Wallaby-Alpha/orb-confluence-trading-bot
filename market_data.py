@@ -156,17 +156,23 @@ def compute_indicators(bars: list, ema_period: int = 50, atr_period: int = 14) -
     return bars
 
 
-def bars_in_utc_window(bars: list, start_hhmm: str, end_hhmm: str) -> list:
+def bars_in_utc_window(bars: list, start_hhmm: str, end_hhmm: str, target_date=None) -> list:
     """
     Filters bars to those whose timestamps fall within the given UTC time window.
     Window times are "HH:MM" strings (UTC).
+    target_date: datetime.date (default: current UTC date).
     """
+    if target_date is None:
+        target_date = datetime.now(tz=timezone.utc).date()
+
     start_h, start_m = map(int, start_hhmm.split(":"))
     end_h,   end_m   = map(int, end_hhmm.split(":"))
 
     result = []
     for b in bars:
         dt = datetime.fromtimestamp(b["ts"], tz=timezone.utc)
+        if dt.date() != target_date:
+            continue
         bar_minutes = dt.hour * 60 + dt.minute
         start_minutes = start_h * 60 + start_m
         end_minutes   = end_h   * 60 + end_m
@@ -175,14 +181,16 @@ def bars_in_utc_window(bars: list, start_hhmm: str, end_hhmm: str) -> list:
     return result
 
 
-def bars_in_et_window(bars: list, start_hhmm: str, end_hhmm: str,
-                      tz_offset_hours: int = -4) -> list:
+def bars_in_et_window(bars: list, start_hhmm: str, end_hhmm: str, target_date=None) -> list:
     """
     Filters bars to those within the given ET time window (HH:MM ET strings).
-    tz_offset_hours: -5 for EST (winter), -4 for EDT (summer). Auto-detected below.
+    target_date: datetime.date (default: current ET date).
     """
     import pytz
     et_tz = pytz.timezone("America/New_York")
+    if target_date is None:
+        target_date = datetime.now(tz=et_tz).date()
+
     start_h, start_m = map(int, start_hhmm.split(":"))
     end_h,   end_m   = map(int, end_hhmm.split(":"))
 
@@ -190,6 +198,8 @@ def bars_in_et_window(bars: list, start_hhmm: str, end_hhmm: str,
     for b in bars:
         dt_utc = datetime.fromtimestamp(b["ts"], tz=timezone.utc)
         dt_et  = dt_utc.astimezone(et_tz)
+        if dt_et.date() != target_date:
+            continue
         bar_minutes = dt_et.hour * 60 + dt_et.minute
         start_minutes = start_h * 60 + start_m
         end_minutes   = end_h   * 60 + end_m

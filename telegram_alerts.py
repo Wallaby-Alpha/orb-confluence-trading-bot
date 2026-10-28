@@ -4,6 +4,8 @@ telegram_alerts.py
 Handles all Telegram message formatting and delivery.
 """
 
+import re
+import html
 import requests
 import logging
 from datetime import datetime
@@ -13,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _send_message(text: str) -> bool:
-    """Sends a message to the configured Telegram chat."""
+    """Sends a message to Telegram with automatic plain-text fallback on parse errors."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -23,10 +25,29 @@ def _send_message(text: str) -> bool:
     }
     try:
         resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code != 200:
-            logger.error(f"Telegram API returned {resp.status_code}: {resp.text}")
-            return False
-        return True
+        if resp.status_code == 200:
+            return True
+
+        logger.error(f"Telegram API returned {resp.status_code}: {resp.text}")
+
+        # If HTML entity parsing fails (HTTP 400), strip HTML tags and retry as plain text immediately
+        if resp.status_code == 400:
+            logger.warning("Retrying Telegram message delivery in plain text mode...")
+            plain_text = re.sub(r"<[^>]+>", "", text)
+            plain_text = html.unescape(plain_text)
+            fallback_payload = {
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": plain_text,
+                "disable_web_page_preview": True,
+            }
+            fb_resp = requests.post(url, json=fallback_payload, timeout=10)
+            if fb_resp.status_code == 200:
+                logger.info("Plain-text fallback alert sent successfully.")
+                return True
+            else:
+                logger.error(f"Fallback Telegram API returned {fb_resp.status_code}: {fb_resp.text}")
+
+        return False
     except Exception as e:
         logger.error(f"Telegram send failed: {e}")
         return False
@@ -114,7 +135,7 @@ def send_premarket_range_alert(prem_ranges: dict, asia_ranges: dict, signals: di
             bias_txt = "LOOKING SHORT"
         elif sig.startswith("SKIP"):
             emoji = "⚪"
-            bias_txt = sig
+            bias_txt = html.escape(sig)
         else:
             emoji = "⚫"
             bias_txt = "NO SETUP"
@@ -176,7 +197,7 @@ def send_tp1_hit_alert(coin: str, direction: str, tp1_price: float,
         f"<i>{datetime.now().strftime('%H:%M:%S ET')}</i>",
         "━━━━━━━━━━━━━━━━━━━━━━",
         f"  Closed 50% @ {tp1_price:.4f}",
-        f"  P&L (partial): <b>+{pnl_r:.3f}R</b>",
+        f"  PnL (partial): <b>+{pnl_r:.3f}R</b>",
         f"  🔒 Stop moved to BE: {be_stop:.4f}",
         f"  ⏳ Riding remaining 50% to TP2...",
         "━━━━━━━━━━━━━━━━━━━━━━",
@@ -201,7 +222,7 @@ def send_trade_exit_alert(coin: str, direction: str, exit_price: float,
         "━━━━━━━━━━━━━━━━━━━━━━",
         f"  Exit Price  : {exit_price:.4f}",
         f"  Exit Reason : {exit_reason}",
-        f"  Total P&L   : <b>{pnl_sign}{total_pnl_r:.3f}R  ({pnl_sign}${total_pnl_usd:.4f})</b>",
+        f"  Total PnL   : <b>{pnl_sign}{total_pnl_r:.3f}R  ({pnl_sign}${total_pnl_usd:.4f})</b>",
         "━━━━━━━━━━━━━━━━━━━━━━",
     ]
     _send_message("\n".join(lines))
@@ -214,7 +235,7 @@ def send_error_alert(message: str) -> None:
         "⚠️ <b>BOT ERROR</b>",
         f"<i>{datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</i>",
         "━━━━━━━━━━━━━━━━━━━━━━",
-        message,
+        html.escape(message),
     ]
     _send_message("\n".join(lines))
     logger.error(f"Sent error alert: {message}")
