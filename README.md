@@ -96,6 +96,7 @@ TELEGRAM_BOT_TOKEN=your_token
 TELEGRAM_CHAT_ID=your_chat_id
 WEEX_API_KEY=your_key
 WEEX_SECRET_KEY=your_secret
+WEEX_PASSPHRASE=your_passphrase
 
 # Optional
 DAILY_RISK_BUDGET_USD=1.0

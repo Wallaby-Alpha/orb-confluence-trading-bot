@@ -1,61 +1,83 @@
 """
 weex_client.py
 ==============
-Handles all trade execution via the Weex futures API.
+Handles trade execution via the Weex Futures V3 API.
 
-Weex API docs: https://weex.gitbook.io/weex-futures-api-en
-Authentication: HMAC-SHA256 signature.
+Weex V3 Futures API:
+  - Base URL: https://api-contract.weex.com
+  - Auth Headers: ACCESS-KEY, ACCESS-SIGN, ACCESS-PASSPHRASE, ACCESS-TIMESTAMP
+  - Signature: Base64(HMAC-SHA256(timestamp + METHOD + path + [?query] + [body], secret))
 
-This module provides:
-  - place_market_order(symbol, side, qty_usd)  -> order_id or None
-  - place_limit_order(symbol, side, price, qty) -> order_id or None
-  - cancel_order(symbol, order_id) -> bool
-  - get_position(symbol) -> dict or None
-  - close_position(symbol) -> bool
+Endpoints:
+  - Order:            POST /capi/v3/order
+  - Cancel:           DELETE /capi/v3/order
+  - TP/SL Plan:       POST /capi/v3/placeTpSlOrder
+  - Single Position:  GET /capi/v3/account/position/singlePosition
+  - All Positions:    GET /capi/v3/account/position/allPosition
 """
 
 import hmac
 import hashlib
+import base64
 import time
+import uuid
+import json
 import logging
 import requests
 from urllib.parse import urlencode
-from config import WEEX_API_KEY, WEEX_SECRET_KEY, WEEX_BASE_URL
+from config import WEEX_API_KEY, WEEX_SECRET_KEY, WEEX_PASSPHRASE, WEEX_BASE_URL
 
 logger = logging.getLogger(__name__)
-
-
-def _sign(params: dict) -> str:
-    """Creates HMAC-SHA256 signature from sorted query string."""
-    query_string = urlencode(sorted(params.items()))
-    signature = hmac.new(
-        WEEX_SECRET_KEY.encode("utf-8"),
-        query_string.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return signature
 
 
 def _timestamp_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _post(endpoint: str, params: dict) -> dict | None:
-    """Signed POST request to Weex API."""
-    params["timestamp"] = _timestamp_ms()
-    params["signature"] = _sign(params)
+def _generate_signature(timestamp: int, method: str, path: str, query_str: str = "", body_str: str = "") -> str:
+    """
+    Constructs Weex V3 pre-sign string:
+    timestamp + method.upper() + path + [?query] + [body]
+    Returns base64 encoded HMAC-SHA256 signature.
+    """
+    pre_sign = str(timestamp) + method.upper() + path
+    if query_str:
+        pre_sign += f"?{query_str}"
+    if body_str:
+        pre_sign += body_str
 
-    url = f"{WEEX_BASE_URL}{endpoint}"
-    headers = {
-        "X-BX-APIKEY": WEEX_API_KEY,
+    sig_bytes = hmac.new(
+        WEEX_SECRET_KEY.encode("utf-8"),
+        pre_sign.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return base64.b64encode(sig_bytes).decode("utf-8")
+
+
+def _get_headers(timestamp: int, method: str, path: str, query_str: str = "", body_str: str = "") -> dict:
+    signature = _generate_signature(timestamp, method, path, query_str, body_str)
+    return {
+        "ACCESS-KEY": WEEX_API_KEY,
+        "ACCESS-SIGN": signature,
+        "ACCESS-PASSPHRASE": WEEX_PASSPHRASE,
+        "ACCESS-TIMESTAMP": str(timestamp),
         "Content-Type": "application/json",
     }
+
+
+def _post(endpoint: str, payload: dict) -> dict | None:
+    """Signed POST request to Weex V3 API."""
+    timestamp = _timestamp_ms()
+    body_str = json.dumps(payload, separators=(',', ':'))
+    headers = _get_headers(timestamp, "POST", endpoint, "", body_str)
+    url = f"{WEEX_BASE_URL}{endpoint}"
+
     try:
-        resp = requests.post(url, json=params, headers=headers, timeout=15)
+        resp = requests.post(url, data=body_str, headers=headers, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-        if data.get("code") not in (0, "0", "200", 200):
-            logger.error(f"Weex API error [{endpoint}]: {data}")
+        if data.get("code") not in (0, "0", 200, "200"):
+            logger.error(f"Weex POST error [{endpoint}]: {data}")
             return None
         return data.get("data", data)
     except Exception as e:
@@ -64,19 +86,21 @@ def _post(endpoint: str, params: dict) -> dict | None:
 
 
 def _get(endpoint: str, params: dict = None) -> dict | None:
-    """Signed GET request to Weex API."""
+    """Signed GET request to Weex V3 API."""
     params = params or {}
-    params["timestamp"] = _timestamp_ms()
-    params["signature"] = _sign(params)
-
+    query_str = urlencode(sorted(params.items())) if params else ""
+    timestamp = _timestamp_ms()
+    headers = _get_headers(timestamp, "GET", endpoint, query_str, "")
     url = f"{WEEX_BASE_URL}{endpoint}"
-    headers = {"X-BX-APIKEY": WEEX_API_KEY}
+    if query_str:
+        url = f"{url}?{query_str}"
+
     try:
-        resp = requests.get(url, params=params, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-        if data.get("code") not in (0, "0", "200", 200):
-            logger.error(f"Weex API error [{endpoint}]: {data}")
+        if data.get("code") not in (0, "0", 200, "200"):
+            logger.error(f"Weex GET error [{endpoint}]: {data}")
             return None
         return data.get("data", data)
     except Exception as e:
@@ -84,171 +108,183 @@ def _get(endpoint: str, params: dict = None) -> dict | None:
         return None
 
 
-def get_symbol_info(symbol: str) -> dict | None:
-    """
-    Fetches contract info for a symbol to get stepSize, tickSize, etc.
-    Needed for proper order quantity rounding.
-    """
-    result = _get("/openApi/swap/v2/quote/contracts")
-    if result is None:
+def _delete(endpoint: str, params: dict = None) -> dict | None:
+    """Signed DELETE request to Weex V3 API."""
+    params = params or {}
+    query_str = urlencode(sorted(params.items())) if params else ""
+    timestamp = _timestamp_ms()
+    headers = _get_headers(timestamp, "DELETE", endpoint, query_str, "")
+    url = f"{WEEX_BASE_URL}{endpoint}"
+    if query_str:
+        url = f"{url}?{query_str}"
+
+    try:
+        resp = requests.delete(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code") not in (0, "0", 200, "200"):
+            logger.error(f"Weex DELETE error [{endpoint}]: {data}")
+            return None
+        return data.get("data", data)
+    except Exception as e:
+        logger.error(f"Weex DELETE {endpoint} failed: {e}")
         return None
-    contracts = result if isinstance(result, list) else result.get("contracts", [])
-    for c in contracts:
-        if c.get("symbol") == symbol:
-            return c
-    return None
+
+
+def _new_client_order_id() -> str:
+    """Generates a unique clientOrderId matching ^[.A-Z:/a-z0-9_-]{1,36}$."""
+    return f"orb_{uuid.uuid4().hex[:16]}"
 
 
 def _qty_from_usd_risk(symbol: str, entry_price: float, stop_price: float,
                         risk_usd: float) -> float:
     """
-    Calculates the contract quantity such that the distance from entry to stop
-    equals exactly risk_usd in USD.
-
-    qty = risk_usd / |entry_price - stop_price|
-
-    NOTE: Weex uses USDT-denominated perpetuals where 1 contract = 1 unit of base.
+    Calculates the contract quantity such that:
+      qty * |entry_price - stop_price| = risk_usd (USD)
     """
     stop_dist = abs(entry_price - stop_price)
     if stop_dist <= 0:
         logger.error(f"Stop distance is zero for {symbol}. Cannot calculate qty.")
         return 0.0
     qty = risk_usd / stop_dist
-    # Round to a reasonable number of decimal places (adjust per contract spec)
-    return round(qty, 6)
+    return round(qty, 4)
 
 
 def place_market_order(symbol: str, side: str, qty: float) -> str | None:
     """
-    Places a market order on Weex.
-
+    Places a market order on Weex V3.
     symbol: e.g. "BTCUSDT"
     side: "BUY" or "SELL"
-    qty: contract quantity (not USD notional)
-
-    Returns the orderId string if successful, else None.
+    qty: contract quantity
     """
-    params = {
-        "symbol":    symbol,
-        "side":      side,
-        "positionSide": "LONG" if side == "BUY" else "SHORT",
-        "type":      "MARKET",
-        "quantity":  str(qty),
+    client_id = _new_client_order_id()
+    payload = {
+        "symbol":           symbol,
+        "side":             side,
+        "positionSide":     "LONG" if side == "BUY" else "SHORT",
+        "type":             "MARKET",
+        "quantity":         str(qty),
+        "newClientOrderId": client_id,
     }
-    result = _post("/openApi/swap/v2/trade/order", params)
+    result = _post("/capi/v3/order", payload)
     if result:
-        order_id = result.get("orderId") or result.get("order_id")
+        order_id = result.get("orderId") or client_id
         logger.info(f"Market order placed: {symbol} {side} qty={qty} id={order_id}")
-        return str(order_id) if order_id else None
+        return str(order_id)
     return None
 
 
 def place_limit_order(symbol: str, side: str, price: float, qty: float) -> str | None:
-    """Places a limit order. Returns orderId or None."""
-    params = {
-        "symbol":      symbol,
-        "side":        side,
-        "positionSide": "LONG" if side == "BUY" else "SHORT",
-        "type":        "LIMIT",
-        "price":       str(round(price, 6)),
-        "quantity":    str(qty),
-        "timeInForce": "GTC",
+    """Places a limit order on Weex V3. Returns orderId or None."""
+    client_id = _new_client_order_id()
+    payload = {
+        "symbol":           symbol,
+        "side":             side,
+        "positionSide":     "LONG" if side == "BUY" else "SHORT",
+        "type":             "LIMIT",
+        "price":            str(round(price, 4)),
+        "quantity":         str(qty),
+        "timeInForce":      "GTC",
+        "newClientOrderId": client_id,
     }
-    result = _post("/openApi/swap/v2/trade/order", params)
+    result = _post("/capi/v3/order", payload)
     if result:
-        order_id = result.get("orderId") or result.get("order_id")
+        order_id = result.get("orderId") or client_id
         logger.info(f"Limit order placed: {symbol} {side} qty={qty} @ {price} id={order_id}")
-        return str(order_id) if order_id else None
+        return str(order_id)
     return None
 
 
 def place_stop_loss_order(symbol: str, side: str, stop_price: float, qty: float) -> str | None:
     """
-    Places a stop-market order (stop loss).
-    side: the CLOSING side — "SELL" for long, "BUY" for short.
+    Places a standalone Stop-Loss plan order via /capi/v3/placeTpSlOrder.
+    side: the closing side ("SELL" for long, "BUY" for short).
     """
-    params = {
-        "symbol":      symbol,
-        "side":        side,
-        "positionSide": "LONG" if side == "SELL" else "SHORT",
-        "type":        "STOP_MARKET",
-        "stopPrice":   str(round(stop_price, 6)),
-        "quantity":    str(qty),
-        "closePosition": "true",
+    pos_side = "LONG" if side == "SELL" else "SHORT"
+    algo_id = _new_client_order_id()
+    payload = {
+        "symbol":           symbol,
+        "clientAlgoId":     algo_id,
+        "planType":         "STOP_LOSS",
+        "triggerPrice":     str(round(stop_price, 4)),
+        "executePrice":     "0",    # 0 = market execution on trigger
+        "quantity":         str(qty),
+        "positionSide":     pos_side,
+        "triggerPriceType": "CONTRACT_PRICE",
+        "reduceOnly":       True,
     }
-    result = _post("/openApi/swap/v2/trade/order", params)
+    result = _post("/capi/v3/placeTpSlOrder", payload)
     if result:
-        order_id = result.get("orderId") or result.get("order_id")
-        logger.info(f"Stop-loss placed: {symbol} {side} stopPrice={stop_price} id={order_id}")
-        return str(order_id) if order_id else None
+        logger.info(f"Stop-loss placed: {symbol} {pos_side} trigger={stop_price} id={algo_id}")
+        return str(algo_id)
     return None
 
 
 def place_take_profit_order(symbol: str, side: str, tp_price: float, qty: float) -> str | None:
     """
-    Places a take-profit limit order.
-    side: the CLOSING side.
+    Places a standalone Take-Profit plan order via /capi/v3/placeTpSlOrder.
+    side: the closing side ("SELL" for long, "BUY" for short).
     """
-    params = {
-        "symbol":      symbol,
-        "side":        side,
-        "positionSide": "LONG" if side == "SELL" else "SHORT",
-        "type":        "TAKE_PROFIT",
-        "stopPrice":   str(round(tp_price, 6)),
-        "price":       str(round(tp_price, 6)),
-        "quantity":    str(qty),
-        "timeInForce": "GTC",
+    pos_side = "LONG" if side == "SELL" else "SHORT"
+    algo_id = _new_client_order_id()
+    payload = {
+        "symbol":           symbol,
+        "clientAlgoId":     algo_id,
+        "planType":         "TAKE_PROFIT",
+        "triggerPrice":     str(round(tp_price, 4)),
+        "executePrice":     str(round(tp_price, 4)),  # limit order execution at TP price
+        "quantity":         str(qty),
+        "positionSide":     pos_side,
+        "triggerPriceType": "CONTRACT_PRICE",
+        "reduceOnly":       True,
     }
-    result = _post("/openApi/swap/v2/trade/order", params)
+    result = _post("/capi/v3/placeTpSlOrder", payload)
     if result:
-        order_id = result.get("orderId") or result.get("order_id")
-        logger.info(f"Take-profit placed: {symbol} {side} price={tp_price} id={order_id}")
-        return str(order_id) if order_id else None
+        logger.info(f"Take-profit placed: {symbol} {pos_side} price={tp_price} id={algo_id}")
+        return str(algo_id)
     return None
 
 
 def cancel_order(symbol: str, order_id: str) -> bool:
-    """Cancels an open order by orderId."""
-    params = {"symbol": symbol, "orderId": order_id}
-    result = _post("/openApi/swap/v2/trade/cancel", params)
+    """Cancels an open order by orderId or clientOrderId."""
+    params = {"symbol": symbol}
+    if order_id.isdigit():
+        params["orderId"] = order_id
+    else:
+        params["origClientOrderId"] = order_id
+
+    result = _delete("/capi/v3/order", params)
     if result is not None:
         logger.info(f"Order cancelled: {symbol} {order_id}")
         return True
     return False
 
 
-def cancel_all_orders(symbol: str) -> bool:
-    """Cancels ALL open orders for a symbol."""
-    params = {"symbol": symbol}
-    result = _post("/openApi/swap/v2/trade/cancelAllOpenOrders", params)
-    return result is not None
-
-
 def get_position(symbol: str) -> dict | None:
     """
     Returns the current open position for a symbol.
-    Returns None if no position or on error.
+    Queries /capi/v3/account/position/singlePosition.
     """
-    result = _get("/openApi/swap/v2/user/positions", {"symbol": symbol})
+    result = _get("/capi/v3/account/position/singlePosition", {"symbol": symbol})
     if not result:
         return None
-    positions = result if isinstance(result, list) else []
+    positions = result if isinstance(result, list) else [result]
     for pos in positions:
-        if pos.get("symbol") == symbol and float(pos.get("positionAmt", 0)) != 0:
+        pos_amt = float(pos.get("positionAmt", pos.get("total", 0)))
+        if pos_amt != 0:
             return pos
     return None
 
 
 def close_position_market(symbol: str) -> bool:
-    """Closes the current open position at market price."""
+    """Closes current open position at market price."""
     pos = get_position(symbol)
     if not pos:
         logger.info(f"No open position to close for {symbol}")
         return True
 
-    pos_amt = float(pos.get("positionAmt", 0))
+    pos_amt = float(pos.get("positionAmt", pos.get("total", 0)))
     pos_side = pos.get("positionSide", "LONG")
-
     if pos_amt == 0:
         return True
 
@@ -264,13 +300,12 @@ def close_position_market(symbol: str) -> bool:
 def get_entry_price_and_qty(symbol: str, direction: str,
                              stop_price: float, risk_usd: float) -> tuple[float, float] | None:
     """
-    Gets the current price and calculates the contract quantity needed
-    so that a loss to stop_price equals exactly risk_usd USD.
-
-    Returns (current_price, qty) or None on failure.
+    Gets current price and calculates contract quantity needed
+    so that risk equals exactly risk_usd.
     """
     from market_data import get_current_price
-    price = get_current_price(symbol.replace("USDT", "").replace("USD", ""))
+    coin_key = symbol.replace("USDT", "").replace("USD", "")
+    price = get_current_price(coin_key)
     if price is None:
         logger.error(f"Cannot get current price for {symbol}")
         return None

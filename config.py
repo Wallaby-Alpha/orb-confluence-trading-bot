@@ -20,7 +20,8 @@ TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
 # ===========================================================================
 WEEX_API_KEY    = os.environ.get("WEEX_API_KEY", "")
 WEEX_SECRET_KEY = os.environ.get("WEEX_SECRET_KEY", "")
-WEEX_BASE_URL   = os.environ.get("WEEX_BASE_URL", "https://api.weex.com")
+WEEX_PASSPHRASE = os.environ.get("WEEX_PASSPHRASE", "")
+WEEX_BASE_URL   = os.environ.get("WEEX_BASE_URL", "https://api-contract.weex.com")
 
 # ===========================================================================
 # KRAKEN API CONFIGURATION (Market Data — public, no auth needed)
@@ -95,6 +96,8 @@ def validate_config():
         missing.append("WEEX_API_KEY")
     if not WEEX_SECRET_KEY:
         missing.append("WEEX_SECRET_KEY")
+    if not WEEX_PASSPHRASE:
+        missing.append("WEEX_PASSPHRASE")
     if missing:
         raise EnvironmentError(
             f"Missing required environment variables: {', '.join(missing)}\n"
