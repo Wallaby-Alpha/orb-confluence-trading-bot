@@ -52,8 +52,8 @@ sudo -u ubuntu "$VENV_DIR/bin/pip" install -r "$BOT_DIR/requirements.txt" -q
 echo "[5/7] Checking environment file..."
 if [ ! -f "$ENV_FILE" ]; then
     cp "$BOT_DIR/.env.example" "$ENV_FILE"
-    chmod 600 "$ENV_FILE"
-    chown root:root "$ENV_FILE"
+    chown root:ubuntu "$ENV_FILE"
+    chmod 640 "$ENV_FILE"
     echo ""
     echo "  ⚠️  Created $ENV_FILE from template."
     echo "  ➡️  You MUST edit it now before starting the bot:"
